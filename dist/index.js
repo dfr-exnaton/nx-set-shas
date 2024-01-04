@@ -37867,6 +37867,7 @@ const errorOnNoSuccessfulWorkflow = process.argv[4];
 const lastSuccessfulEvent = process.argv[5];
 const workingDirectory = process.argv[6];
 const workflowId = process.argv[7];
+const ignorePrerelease = process.argv[8];
 const defaultWorkingDirectory = ".";
 const ProxifiedClient = action_1.Octokit.plugin(proxyPlugin);
 let BASE_SHA;
@@ -37972,7 +37973,7 @@ function findSuccessfulCommit(workflow_id, run_id, owner, repo, branch, lastSucc
             process.stdout.write(`Workflow Id not provided. Using workflow '${workflow_id}'\n`);
         }
         // fetch all workflow runs on a given repo/branch/workflow with push and success
-        const shas = yield octokit
+        let shas = yield octokit
             .request(`GET /repos/${owner}/${repo}/actions/workflows/${workflow_id}/runs`, {
             owner,
             repo,
@@ -37983,6 +37984,10 @@ function findSuccessfulCommit(workflow_id, run_id, owner, repo, branch, lastSucc
             status: "success",
         })
             .then(({ data: { workflow_runs } }) => workflow_runs.map((run) => run.head_sha));
+        if (ignorePrerelease === "true") {
+            // Filter shas to only include those where the corresponding tag is a valid semver release, excluding pre-releases
+            shas = shas.filter(isSemverRelease);
+        }
         return yield findExistingCommit(octokit, branch, shas);
     });
 }
@@ -38062,6 +38067,29 @@ function commitExists(octokit, branchName, commitSha) {
  */
 function stripNewLineEndings(string) {
     return string.replace("\n", "");
+}
+/**
+ * Checks if the given tag is a valid Semver release (excluding pre-releases)
+ */
+function isSemverReleaseTag(tag) {
+    // Semver pattern from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
+    const pattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+    const groups = pattern.exec(tag);
+    // The 4-th group is the "prerelease" part of the Semver string
+    if (groups == null || groups[0] == null || groups[4] != null)
+        return false;
+    return true;
+}
+/**
+ * Checks if the given commit has a valid Semver release tag
+ */
+function isSemverRelease(sha) {
+    // Get the tags for the commit
+    const tags = (0, child_process_1.spawnSync)("git", ["tag", "--points-at", sha], {
+        encoding: "utf-8",
+    }).stdout.split("\n");
+    // Return true if any of the tags is a valid Semver release (excluding pre-releases)
+    return tags.some((tag) => isSemverReleaseTag(tag));
 }
 
 

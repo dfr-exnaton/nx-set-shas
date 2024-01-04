@@ -17,6 +17,7 @@ const errorOnNoSuccessfulWorkflow = process.argv[4];
 const lastSuccessfulEvent = process.argv[5];
 const workingDirectory = process.argv[6];
 const workflowId = process.argv[7];
+const ignorePrerelease = process.argv[8];
 const defaultWorkingDirectory = ".";
 
 const ProxifiedClient = Octokit.plugin(proxyPlugin);
@@ -29,7 +30,7 @@ let BASE_SHA: string;
     } else {
       process.stdout.write("\n");
       process.stdout.write(
-        `WARNING: Working directory '${workingDirectory}' doesn't exist.\n`
+        `WARNING: Working directory '${workingDirectory}' doesn't exist.\n`,
       );
     }
   }
@@ -49,7 +50,7 @@ let BASE_SHA: string;
       const baseResult = spawnSync(
         "git",
         ["merge-base", `origin/${mainBranchName}`, mergeBaseRef],
-        { encoding: "utf-8" }
+        { encoding: "utf-8" },
       );
       BASE_SHA = baseResult.stdout;
     } catch (e) {
@@ -64,7 +65,7 @@ let BASE_SHA: string;
         owner,
         repo,
         mainBranchName,
-        lastSuccessfulEvent
+        lastSuccessfulEvent,
       );
     } catch (e) {
       core.setFailed(e.message);
@@ -76,27 +77,27 @@ let BASE_SHA: string;
         reportFailure(mainBranchName);
         return;
       } else {
-        process.stdout.write(   "\n");
+        process.stdout.write("\n");
         process.stdout.write(
-          `WARNING: Unable to find a successful workflow run on 'origin/${mainBranchName}', or the latest successful workflow was connected to a commit which no longer exists on that branch (e.g. if that branch was rebased)\n`
+          `WARNING: Unable to find a successful workflow run on 'origin/${mainBranchName}', or the latest successful workflow was connected to a commit which no longer exists on that branch (e.g. if that branch was rebased)\n`,
         );
         process.stdout.write(
-          `We are therefore defaulting to use HEAD~1 on 'origin/${mainBranchName}'\n`
+          `We are therefore defaulting to use HEAD~1 on 'origin/${mainBranchName}'\n`,
         );
         process.stdout.write("\n");
         process.stdout.write(
-          `NOTE: You can instead make this a hard error by setting 'error-on-no-successful-workflow' on the action in your workflow.\n`
+          `NOTE: You can instead make this a hard error by setting 'error-on-no-successful-workflow' on the action in your workflow.\n`,
         );
         process.stdout.write("\n");
 
         const commitCountOutput = spawnSync(
           "git",
           ["rev-list", "--count", `origin/${mainBranchName}`],
-          { encoding: "utf-8" }
+          { encoding: "utf-8" },
         ).stdout;
         const commitCount = parseInt(
           stripNewLineEndings(commitCountOutput),
-          10
+          10,
         );
 
         const LAST_COMMIT_CMD = `origin/${mainBranchName}${
@@ -111,7 +112,7 @@ let BASE_SHA: string;
     } else {
       process.stdout.write("\n");
       process.stdout.write(
-        `Found the last successful workflow run on 'origin/${mainBranchName}'\n`
+        `Found the last successful workflow run on 'origin/${mainBranchName}'\n`,
       );
       process.stdout.write(`Commit: ${BASE_SHA}\n`);
     }
@@ -148,7 +149,7 @@ async function findSuccessfulCommit(
   owner: string,
   repo: string,
   branch: string,
-  lastSuccessfulEvent: string
+  lastSuccessfulEvent: string,
 ): Promise<string | undefined> {
   const octokit = new ProxifiedClient();
   if (!workflow_id) {
@@ -162,11 +163,11 @@ async function findSuccessfulCommit(
       .then(({ data: { workflow_id } }) => workflow_id);
     process.stdout.write("\n");
     process.stdout.write(
-      `Workflow Id not provided. Using workflow '${workflow_id}'\n`
+      `Workflow Id not provided. Using workflow '${workflow_id}'\n`,
     );
   }
   // fetch all workflow runs on a given repo/branch/workflow with push and success
-  const shas = await octokit
+  let shas = await octokit
     .request(
       `GET /repos/${owner}/${repo}/actions/workflows/${workflow_id}/runs`,
       {
@@ -177,11 +178,16 @@ async function findSuccessfulCommit(
         workflow_id,
         event: lastSuccessfulEvent,
         status: "success",
-      }
+      },
     )
     .then(({ data: { workflow_runs } }) =>
-      workflow_runs.map((run: { head_sha: any }) => run.head_sha)
+      workflow_runs.map((run: { head_sha: any }) => run.head_sha),
     );
+
+  if (ignorePrerelease === "true") {
+    // Filter shas to only include those where the corresponding tag is a valid semver release, excluding pre-releases
+    shas = shas.filter(isSemverRelease);
+  }
 
   return await findExistingCommit(octokit, branch, shas);
 }
@@ -198,7 +204,7 @@ async function findMergeBaseRef(): Promise<string> {
 function findMergeQueuePr(): string {
   const { head_ref, base_sha } = github.context.payload.merge_group;
   const result = new RegExp(
-    `^refs/heads/gh-readonly-queue/${mainBranchName}/pr-(\\d+)-${base_sha}$`
+    `^refs/heads/gh-readonly-queue/${mainBranchName}/pr-(\\d+)-${base_sha}$`,
   ).exec(head_ref);
   return result ? result.at(1) : undefined;
 }
@@ -213,7 +219,7 @@ async function findMergeQueueBranch(): Promise<string> {
   const octokit = new ProxifiedClient();
   const result = await octokit.request(
     `GET /repos/${owner}/${repo}/pulls/${pull_number}`,
-    { owner, repo, pull_number: +pull_number }
+    { owner, repo, pull_number: +pull_number },
   );
   return result.data.head.ref;
 }
@@ -224,7 +230,7 @@ async function findMergeQueueBranch(): Promise<string> {
 async function findExistingCommit(
   octokit: Octokit,
   branchName: string,
-  shas: string[]
+  shas: string[],
 ): Promise<string | undefined> {
   for (const commitSha of shas) {
     if (await commitExists(octokit, branchName, commitSha)) {
@@ -240,7 +246,7 @@ async function findExistingCommit(
 async function commitExists(
   octokit: Octokit,
   branchName: string,
-  commitSha: string
+  commitSha: string,
 ): Promise<boolean> {
   try {
     spawnSync("git", ["cat-file", "-e", commitSha], {
@@ -263,7 +269,7 @@ async function commitExists(
     });
 
     return commits.data.some(
-      (commit: { sha: string }) => commit.sha === commitSha
+      (commit: { sha: string }) => commit.sha === commitSha,
     );
   } catch {
     return false;
@@ -275,4 +281,29 @@ async function commitExists(
  */
 function stripNewLineEndings(string: string): string {
   return string.replace("\n", "");
+}
+
+/**
+ * Checks if the given tag is a valid Semver release (excluding pre-releases)
+ */
+function isSemverReleaseTag(tag: string): boolean {
+  // Semver pattern from https://semver.org/#is-there-a-suggested-regular-expression-regex-to-check-a-semver-string
+  const pattern =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+  const groups = pattern.exec(tag);
+  // The 4-th group is the "prerelease" part of the Semver string
+  if (groups == null || groups[0] == null || groups[4] != null) return false;
+  return true;
+}
+
+/**
+ * Checks if the given commit has a valid Semver release tag
+ */
+function isSemverRelease(sha: string): boolean {
+  // Get the tags for the commit
+  const tags = spawnSync("git", ["tag", "--points-at", sha], {
+    encoding: "utf-8",
+  }).stdout.split("\n");
+  // Return true if any of the tags is a valid Semver release (excluding pre-releases)
+  return tags.some((tag) => isSemverReleaseTag(tag));
 }
